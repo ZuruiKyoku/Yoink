@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Yoink</string>
+
+    <!-- Main screen -->
+    <string name="main_title">Yoink</string>
+    <string name="main_subtitle">Paste a link, we\'ll swipe the goods.</string>
+    <string name="url_input_hint">Paste a Twitter/X, Instagram, or Pinterest link…</string>
+    <string name="download_button">Yoink it</string>
+    <string name="downloading_button">Yoinking…</string>
+    <string name="clear_input">Clear</string>
+    <string name="platform_unknown">Unrecognized link</string>
+    <string name="error_invalid_url">That doesn\'t look like a Twitter/X, Instagram, or Pinterest link.</string>
+    <string name="error_no_media">Couldn\'t find any media on that post.</string>
+    <string name="error_private_or_deleted">This post looks private, deleted, or otherwise off-limits.</string>
+    <string name="error_network">Network hiccup — check your connection and try again.</string>
+    <string name="error_unknown">Something went sideways. Try again in a bit.</string>
+    <string name="notice_carousel_limited">This is a multi-item post — grabbing the first item only.</string>
+    <string name="toast_nabbed">Nabbed! Added to the nest.</string>
+    <string name="toast_failed">Failed to yoink that one.</string>
+
+    <!-- Nest (history) -->
+    <string name="nest_title">The Nest</string>
+    <string name="nest_empty_title">Nothing here yet</string>
+    <string name="nest_empty_subtitle">Paste a link on the main screen and start stashing loot.</string>
+    <string name="nest_filter_all">All</string>
+    <string name="nest_filter_twitter">Twitter/X</string>
+    <string name="nest_filter_instagram">Instagram</string>
+    <string name="nest_filter_pinterest">Pinterest</string>
+    <string name="nest_delete_entry">Remove from nest</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_section_folders">Save location</string>
+    <string name="settings_image_folder">Image folder (under Pictures/)</string>
+    <string name="settings_video_folder">Video folder (under Movies/)</string>
+    <string name="settings_per_platform_subfolders">Per-platform subfolders</string>
+    <string name="settings_per_platform_subfolders_desc">Sort loot into Twitter, Instagram, and Pinterest subfolders.</string>
+    <string name="settings_section_behavior">Behavior</string>
+    <string name="settings_auto_clipboard">Auto-detect clipboard links</string>
+    <string name="settings_auto_clipboard_desc">Check the clipboard for a supported link when Yoink opens.</string>
+
+    <!-- Notifications -->
+    <string name="notif_channel_downloads">Downloads</string>
+    <string name="notif_channel_downloads_desc">Progress for media being yoinked</string>
+    <string name="notif_downloading_title">Yoinking…</string>
+    <string name="notif_download_success">Nabbed! Added to the nest.</string>
+    <string name="notif_download_failure">Yoink failed</string>
+
+    <!-- Content descriptions -->
+    <string name="cd_magpie_mascot">Yoink magpie mascot</string>
+    <string name="cd_platform_badge">Detected platform</string>
+    <string name="cd_thumbnail">Download thumbnail</string>
+    <string name="cd_settings">Settings</string>
+    <string name="cd_back">Back</string>
+</resources>

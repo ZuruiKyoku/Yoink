@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="heist_background">#FF121014</color>
+    <color name="heist_surface">#FF1C1A20</color>
+    <color name="heist_yellow">#FFF4E409</color>
+    <color name="heist_on_yellow">#FF121014</color>
+</resources>
