@@ -100,7 +100,7 @@ class PinterestExtractor : MediaExtractor {
             }
         } ?: return ExtractionResult.Error(ExtractionError.NO_MEDIA_FOUND)
 
-        return ExtractionResult.Success(media)
+        return ExtractionResult.Success(listOf(media))
     }
 
     /** Returns (bestVideoUrl, origImageUrl) found anywhere in the page's JSON state blobs. */

@@ -69,39 +69,42 @@ class TwitterExtractor : MediaExtractor {
             return ExtractionResult.Error(ExtractionError.NO_MEDIA_FOUND)
         }
 
-        val isPartialCarousel = mediaDetails.length() > 1
-        val first = mediaDetails.getJSONObject(0)
+        // A multi-photo tweet lists every item here — build one ExtractedMedia per item and
+        // let the caller decide whether to prompt (a bad item is skipped, not fatal).
+        val items = (0 until mediaDetails.length()).mapNotNull { i ->
+            itemToMedia(mediaDetails.getJSONObject(i), sourceUrl)
+        }
 
-        val media = when (first.optString("type")) {
-            "photo" -> {
-                val rawUrl = first.optString("media_url_https").takeIf { it.isNotBlank() }
-                    ?: return ExtractionResult.Error(ExtractionError.NO_MEDIA_FOUND)
+        if (items.isEmpty()) return ExtractionResult.Error(ExtractionError.NO_MEDIA_FOUND)
+        return ExtractionResult.Success(items)
+    }
+
+    private fun itemToMedia(item: JSONObject, sourceUrl: String): ExtractedMedia? = when (item.optString("type")) {
+        "photo" -> {
+            val rawUrl = item.optString("media_url_https").takeIf { it.isNotBlank() }
+            rawUrl?.let {
                 ExtractedMedia(
-                    mediaUrl = highestQualityPhotoUrl(rawUrl),
+                    mediaUrl = highestQualityPhotoUrl(it),
                     mediaType = MediaType.IMAGE,
                     platform = platform,
-                    sourceUrl = sourceUrl,
-                    isPartialCarousel = isPartialCarousel
+                    sourceUrl = sourceUrl
                 )
             }
+        }
 
-            "video", "animated_gif" -> {
-                val variant = bestMp4Variant(first.optJSONObject("video_info"))
-                    ?: return ExtractionResult.Error(ExtractionError.NO_MEDIA_FOUND)
+        "video", "animated_gif" -> {
+            bestMp4Variant(item.optJSONObject("video_info"))?.let { variant ->
                 ExtractedMedia(
                     mediaUrl = variant,
-                    mediaType = if (first.optString("type") == "animated_gif") MediaType.GIF else MediaType.VIDEO,
+                    mediaType = if (item.optString("type") == "animated_gif") MediaType.GIF else MediaType.VIDEO,
                     platform = platform,
                     sourceUrl = sourceUrl,
-                    thumbnailUrl = first.optString("media_url_https").takeIf { it.isNotBlank() },
-                    isPartialCarousel = isPartialCarousel
+                    thumbnailUrl = item.optString("media_url_https").takeIf { it.isNotBlank() }
                 )
             }
+        }
 
-            else -> null
-        } ?: return ExtractionResult.Error(ExtractionError.NO_MEDIA_FOUND)
-
-        return ExtractionResult.Success(media)
+        else -> null
     }
 
     private fun highestQualityPhotoUrl(rawUrl: String): String {

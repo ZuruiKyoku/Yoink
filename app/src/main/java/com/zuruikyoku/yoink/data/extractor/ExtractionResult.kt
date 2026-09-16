@@ -10,6 +10,7 @@ enum class ExtractionError {
 }
 
 sealed class ExtractionResult {
-    data class Success(val media: ExtractedMedia) : ExtractionResult()
+    /** Always non-empty. More than one entry means the post is a carousel — let the user pick. */
+    data class Success(val media: List<ExtractedMedia>) : ExtractionResult()
     data class Error(val reason: ExtractionError, val cause: Throwable? = null) : ExtractionResult()
 }

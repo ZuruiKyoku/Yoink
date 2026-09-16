@@ -26,10 +26,21 @@ object DownloadNotifier {
         manager.createNotificationChannel(channel)
     }
 
-    fun progressNotification(context: Context, percent: Int, indeterminate: Boolean): android.app.Notification {
+    fun progressNotification(
+        context: Context,
+        percent: Int,
+        indeterminate: Boolean,
+        queueIndex: Int = 1,
+        queueTotal: Int = 1
+    ): android.app.Notification {
         ensureChannel(context)
+        val title = if (queueTotal > 1) {
+            context.getString(R.string.notif_downloading_title_indexed, queueIndex, queueTotal)
+        } else {
+            context.getString(R.string.notif_downloading_title)
+        }
         return NotificationCompat.Builder(context, CHANNEL_ID)
-            .setContentTitle(context.getString(R.string.notif_downloading_title))
+            .setContentTitle(title)
             .setSmallIcon(R.drawable.ic_notification)
             .setOngoing(true)
             .setOnlyAlertOnce(true)

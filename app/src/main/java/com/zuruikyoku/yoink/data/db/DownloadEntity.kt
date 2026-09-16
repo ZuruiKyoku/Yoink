@@ -13,6 +13,5 @@ data class DownloadEntity(
     val mediaType: String,
     /** content:// MediaStore URI of the saved file — used to open it and to render a thumbnail. */
     val mediaUri: String,
-    val timestamp: Long,
-    val isPartialCarousel: Boolean
+    val timestamp: Long
 )

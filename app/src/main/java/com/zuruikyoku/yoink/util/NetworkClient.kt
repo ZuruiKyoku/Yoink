@@ -1,5 +1,6 @@
 package com.zuruikyoku.yoink.util
 
+import com.zuruikyoku.yoink.data.platform.Platform
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Response
@@ -19,6 +20,13 @@ object NetworkClient {
             .writeTimeout(20, TimeUnit.SECONDS)
             .addInterceptor(DefaultHeadersInterceptor())
             .build()
+    }
+
+    /** CDNs for these platforms hotlink-protect on Referer — used for both the real download and picker previews. */
+    fun refererFor(platform: Platform): String = when (platform) {
+        Platform.TWITTER -> "https://twitter.com/"
+        Platform.INSTAGRAM -> "https://www.instagram.com/"
+        Platform.PINTEREST -> "https://www.pinterest.com/"
     }
 
     private class DefaultHeadersInterceptor : Interceptor {

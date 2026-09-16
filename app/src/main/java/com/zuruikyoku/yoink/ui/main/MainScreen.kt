@@ -40,6 +40,7 @@ import com.zuruikyoku.yoink.R
 import com.zuruikyoku.yoink.data.platform.Platform
 import com.zuruikyoku.yoink.ui.components.EmptyNest
 import com.zuruikyoku.yoink.ui.components.HistoryItemRow
+import com.zuruikyoku.yoink.ui.components.MediaPickerSheet
 import com.zuruikyoku.yoink.ui.components.UrlInputSection
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -60,19 +61,25 @@ fun MainScreen(
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             when (event) {
-                is MainEvent.DownloadSucceeded -> {
-                    val message = if (event.isPartialCarousel) {
-                        context.getString(R.string.notice_carousel_limited)
-                    } else {
-                        context.getString(R.string.toast_nabbed)
+                is MainEvent.QueueFinished -> {
+                    val message = when {
+                        event.succeeded == 0 -> context.getString(R.string.toast_failed)
+                        event.failed == 0 && event.succeeded == 1 -> context.getString(R.string.toast_nabbed)
+                        event.failed == 0 -> context.getString(R.string.toast_nabbed_multiple, event.succeeded)
+                        else -> context.getString(R.string.toast_nabbed_partial, event.succeeded, event.failed)
                     }
                     Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                 }
-                is MainEvent.DownloadFailed -> {
-                    Toast.makeText(context, context.getString(R.string.toast_failed), Toast.LENGTH_SHORT).show()
-                }
             }
         }
+    }
+
+    uiState.pickerItems?.let { items ->
+        MediaPickerSheet(
+            items = items,
+            onConfirm = viewModel::onPickerConfirmed,
+            onDismiss = viewModel::onPickerDismissed
+        )
     }
 
     Scaffold(
@@ -109,8 +116,11 @@ fun MainScreen(
                 UrlInputSection(
                     url = uiState.urlInput,
                     detectedPlatform = uiState.detectedPlatform,
+                    isExtracting = uiState.isExtracting,
                     isDownloading = uiState.isDownloading,
                     progressPercent = uiState.progressPercent,
+                    queueIndex = uiState.queueIndex,
+                    queueTotal = uiState.queueTotal,
                     errorMessageRes = uiState.errorMessageRes,
                     onUrlChanged = viewModel::onUrlChanged,
                     onClear = viewModel::onClear,

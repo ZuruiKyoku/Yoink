@@ -8,6 +8,8 @@
     <string name="url_input_hint">Paste a Twitter/X, Instagram, or Pinterest link…</string>
     <string name="download_button">Yoink it</string>
     <string name="downloading_button">Yoinking…</string>
+    <string name="downloading_button_indexed">Yoinking (%1$d/%2$d)…</string>
+    <string name="checking_button">Checking…</string>
     <string name="clear_input">Clear</string>
     <string name="platform_unknown">Unrecognized link</string>
     <string name="error_invalid_url">That doesn\'t look like a Twitter/X, Instagram, or Pinterest link.</string>
@@ -15,9 +17,19 @@
     <string name="error_private_or_deleted">This post looks private, deleted, or otherwise off-limits.</string>
     <string name="error_network">Network hiccup — check your connection and try again.</string>
     <string name="error_unknown">Something went sideways. Try again in a bit.</string>
-    <string name="notice_carousel_limited">This is a multi-item post — grabbing the first item only.</string>
     <string name="toast_nabbed">Nabbed! Added to the nest.</string>
+    <string name="toast_nabbed_multiple">Nabbed %1$d! Added to the nest.</string>
+    <string name="toast_nabbed_partial">Nabbed %1$d, %2$d failed.</string>
     <string name="toast_failed">Failed to yoink that one.</string>
+
+    <!-- Media picker (carousel posts) -->
+    <string name="picker_title">Pick what to yoink</string>
+    <string name="picker_subtitle">%1$d items on this post — choose one or more.</string>
+    <string name="picker_select_all">Select all</string>
+    <string name="picker_deselect_all">Deselect all</string>
+    <string name="picker_download_button">Yoink %1$d</string>
+    <string name="picker_download_button_none">Select at least one</string>
+    <string name="picker_item_index">%1$d of %2$d</string>
 
     <!-- Nest (history) -->
     <string name="nest_title">The Nest</string>
@@ -44,6 +56,7 @@
     <string name="notif_channel_downloads">Downloads</string>
     <string name="notif_channel_downloads_desc">Progress for media being yoinked</string>
     <string name="notif_downloading_title">Yoinking…</string>
+    <string name="notif_downloading_title_indexed">Yoinking (%1$d/%2$d)…</string>
     <string name="notif_download_success">Nabbed! Added to the nest.</string>
     <string name="notif_download_failure">Yoink failed</string>
 
@@ -51,6 +64,7 @@
     <string name="cd_magpie_mascot">Yoink magpie mascot</string>
     <string name="cd_platform_badge">Detected platform</string>
     <string name="cd_thumbnail">Download thumbnail</string>
+    <string name="cd_picker_preview">Media preview</string>
     <string name="cd_settings">Settings</string>
     <string name="cd_back">Back</string>
 </resources>

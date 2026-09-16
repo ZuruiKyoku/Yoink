@@ -11,7 +11,10 @@ import com.zuruikyoku.yoink.data.clipboard.ClipboardHelper
 import com.zuruikyoku.yoink.data.db.DownloadEntity
 import com.zuruikyoku.yoink.data.db.YoinkDatabase
 import com.zuruikyoku.yoink.data.download.DownloadWorker
+import com.zuruikyoku.yoink.data.extractor.ExtractedMedia
 import com.zuruikyoku.yoink.data.extractor.ExtractionError
+import com.zuruikyoku.yoink.data.extractor.ExtractionResult
+import com.zuruikyoku.yoink.data.extractor.ExtractorRegistry
 import com.zuruikyoku.yoink.data.platform.Platform
 import com.zuruikyoku.yoink.data.platform.UrlDetector
 import com.zuruikyoku.yoink.data.settings.SettingsRepository
@@ -53,6 +56,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private var hasCheckedClipboard = false
+
+    // In-memory download queue — one item downloads at a time so a single progress bar
+    // and notification can represent the whole batch ("2 of 4").
+    private val downloadQueue = ArrayDeque<ExtractedMedia>()
+    private var queueSucceeded = 0
+    private var queueFailed = 0
+    private var queueSize = 0
 
     /** Called once when the main screen first appears (not on every recomposition/rotation). */
     fun maybePrefillFromClipboard() {
@@ -99,50 +109,120 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onDownloadClicked() {
-        if (_uiState.value.isDownloading) return
-        val detected = UrlDetector.detect(_uiState.value.urlInput)
+        val state = _uiState.value
+        if (state.isDownloading || state.isExtracting) return
+        val detected = UrlDetector.detect(state.urlInput)
         if (detected == null) {
             _uiState.update { it.copy(errorMessageRes = R.string.error_invalid_url) }
             return
         }
 
-        val request = DownloadWorker.buildRequest(detected.url, detected.platform)
-        _uiState.update { it.copy(isDownloading = true, progressPercent = 0, errorMessageRes = null) }
+        _uiState.update { it.copy(isExtracting = true, errorMessageRes = null) }
+        viewModelScope.launch {
+            when (val result = ExtractorRegistry.forPlatform(detected.platform).extract(detected.url)) {
+                is ExtractionResult.Error -> {
+                    _uiState.update { it.copy(isExtracting = false, errorMessageRes = errorMessageFor(result.reason)) }
+                }
+
+                is ExtractionResult.Success -> {
+                    if (result.media.size == 1) {
+                        _uiState.update { it.copy(isExtracting = false) }
+                        startDownloadQueue(result.media)
+                    } else {
+                        _uiState.update { it.copy(isExtracting = false, pickerItems = result.media) }
+                    }
+                }
+            }
+        }
+    }
+
+    /** User confirmed a selection from the "pick what to yoink" sheet. */
+    fun onPickerConfirmed(selected: List<ExtractedMedia>) {
+        _uiState.update { it.copy(pickerItems = null) }
+        if (selected.isNotEmpty()) startDownloadQueue(selected)
+    }
+
+    fun onPickerDismissed() {
+        _uiState.update { it.copy(pickerItems = null) }
+    }
+
+    private fun startDownloadQueue(items: List<ExtractedMedia>) {
+        downloadQueue.clear()
+        downloadQueue.addAll(items)
+        queueSize = items.size
+        queueSucceeded = 0
+        queueFailed = 0
+        advanceQueue()
+    }
+
+    private fun advanceQueue() {
+        val next = downloadQueue.removeFirstOrNull()
+        if (next == null) {
+            val succeeded = queueSucceeded
+            val failed = queueFailed
+            _uiState.update {
+                it.copy(isDownloading = false, progressPercent = 0, queueIndex = 0, queueTotal = 0)
+            }
+            viewModelScope.launch { _events.emit(MainEvent.QueueFinished(succeeded, failed)) }
+            return
+        }
+
+        val doneSoFar = queueSize - downloadQueue.size // includes the item we just popped
+        _uiState.update {
+            it.copy(
+                isDownloading = true,
+                progressPercent = 0,
+                queueIndex = doneSoFar,
+                queueTotal = queueSize,
+                urlInput = "",
+                detectedPlatform = null,
+                errorMessageRes = null
+            )
+        }
+
+        val request = DownloadWorker.buildRequest(next, queueIndex = doneSoFar, queueTotal = queueSize)
         workManager.enqueue(request)
         observeWork(request.id)
     }
 
     private fun observeWork(id: UUID) {
         viewModelScope.launch {
+            // Room's observed Flow can re-emit the same terminal state if unrelated work
+            // rows change; this guard keeps a redundant emission from double-counting.
+            var handled = false
             workManager.getWorkInfoByIdFlow(id).collect { info ->
-                if (info == null) return@collect
+                if (info == null || handled) return@collect
                 when (info.state) {
                     WorkInfo.State.RUNNING, WorkInfo.State.ENQUEUED -> {
                         val percent = info.progress.getInt(
                             DownloadWorker.KEY_PROGRESS_PERCENT,
                             _uiState.value.progressPercent
                         )
-                        _uiState.update { it.copy(isDownloading = true, progressPercent = percent) }
+                        _uiState.update { it.copy(progressPercent = percent) }
                     }
 
                     WorkInfo.State.SUCCEEDED -> {
-                        val isPartial = info.outputData.getBoolean(DownloadWorker.KEY_IS_PARTIAL_CAROUSEL, false)
-                        _uiState.update {
-                            it.copy(isDownloading = false, progressPercent = 100, urlInput = "", detectedPlatform = null)
-                        }
-                        _events.emit(MainEvent.DownloadSucceeded(isPartial))
+                        handled = true
+                        queueSucceeded++
+                        advanceQueue()
                     }
 
                     WorkInfo.State.FAILED -> {
-                        val reason = info.outputData.getString(DownloadWorker.KEY_ERROR_REASON)
-                            ?.let { runCatching { ExtractionError.valueOf(it) }.getOrNull() }
-                            ?: ExtractionError.UNKNOWN
-                        _uiState.update { it.copy(isDownloading = false, errorMessageRes = errorMessageFor(reason)) }
-                        _events.emit(MainEvent.DownloadFailed)
+                        handled = true
+                        queueFailed++
+                        if (queueSize == 1) {
+                            val reason = info.outputData.getString(DownloadWorker.KEY_ERROR_REASON)
+                                ?.let { runCatching { ExtractionError.valueOf(it) }.getOrNull() }
+                                ?: ExtractionError.UNKNOWN
+                            _uiState.update { it.copy(errorMessageRes = errorMessageFor(reason)) }
+                        }
+                        advanceQueue()
                     }
 
                     WorkInfo.State.CANCELLED -> {
-                        _uiState.update { it.copy(isDownloading = false) }
+                        handled = true
+                        queueFailed++
+                        advanceQueue()
                     }
 
                     else -> Unit

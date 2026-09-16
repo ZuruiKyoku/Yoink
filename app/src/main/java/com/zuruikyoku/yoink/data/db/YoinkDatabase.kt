@@ -5,7 +5,7 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [DownloadEntity::class], version = 1, exportSchema = false)
+@Database(entities = [DownloadEntity::class], version = 2, exportSchema = false)
 abstract class YoinkDatabase : RoomDatabase() {
 
     abstract fun downloadDao(): DownloadDao
@@ -20,7 +20,11 @@ abstract class YoinkDatabase : RoomDatabase() {
                     context.applicationContext,
                     YoinkDatabase::class.java,
                     "yoink.db"
-                ).build().also { instance = it }
+                )
+                    // No released migration path yet for this single-user local history table —
+                    // a schema bump just wipes and recreates it rather than carrying a Migration.
+                    .fallbackToDestructiveMigration()
+                    .build().also { instance = it }
             }
     }
 }

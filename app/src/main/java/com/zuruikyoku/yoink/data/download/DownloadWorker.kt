@@ -15,8 +15,6 @@ import com.zuruikyoku.yoink.data.db.DownloadEntity
 import com.zuruikyoku.yoink.data.db.YoinkDatabase
 import com.zuruikyoku.yoink.data.extractor.ExtractedMedia
 import com.zuruikyoku.yoink.data.extractor.ExtractionError
-import com.zuruikyoku.yoink.data.extractor.ExtractionResult
-import com.zuruikyoku.yoink.data.extractor.ExtractorRegistry
 import com.zuruikyoku.yoink.data.extractor.MediaType
 import com.zuruikyoku.yoink.data.extractor.isVideoLike
 import com.zuruikyoku.yoink.data.platform.Platform
@@ -25,24 +23,33 @@ import com.zuruikyoku.yoink.util.NetworkClient
 import okhttp3.Request
 import java.io.IOException
 
+/**
+ * Downloads and saves ONE already-resolved media item. Extraction (and, for a carousel,
+ * letting the user pick which item) happens beforehand in MainViewModel — this worker
+ * never talks to a platform's extractor, only to the CDN URL it's handed.
+ */
 class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
-        val sourceUrl = inputData.getString(KEY_SOURCE_URL)
+        val mediaUrl = inputData.getString(KEY_MEDIA_URL)
+        val mediaType = inputData.getString(KEY_MEDIA_TYPE)?.let { runCatching { MediaType.valueOf(it) }.getOrNull() }
         val platform = inputData.getString(KEY_PLATFORM)?.let { runCatching { Platform.valueOf(it) }.getOrNull() }
-        if (sourceUrl.isNullOrBlank() || platform == null) {
-            return Result.failure(errorData(ExtractionError.INVALID_URL))
+        val sourceUrl = inputData.getString(KEY_SOURCE_URL)
+        if (mediaUrl.isNullOrBlank() || mediaType == null || platform == null || sourceUrl.isNullOrBlank()) {
+            return Result.failure(errorData(ExtractionError.UNKNOWN))
         }
+        val queueIndex = inputData.getInt(KEY_QUEUE_INDEX, 1)
+        val queueTotal = inputData.getInt(KEY_QUEUE_TOTAL, 1)
 
-        setForeground(createForegroundInfo(0, indeterminate = true))
+        val media = ExtractedMedia(
+            mediaUrl = mediaUrl,
+            mediaType = mediaType,
+            platform = platform,
+            sourceUrl = sourceUrl,
+            thumbnailUrl = inputData.getString(KEY_THUMBNAIL_URL)
+        )
 
-        val media = when (val extraction = ExtractorRegistry.forPlatform(platform).extract(sourceUrl)) {
-            is ExtractionResult.Error -> {
-                DownloadNotifier.showResultNotification(applicationContext, resultNotificationId(), success = false)
-                return Result.failure(errorData(extraction.reason))
-            }
-            is ExtractionResult.Success -> extraction.media
-        }
+        setForeground(createForegroundInfo(0, indeterminate = true, queueIndex, queueTotal))
 
         val settings = SettingsRepository(applicationContext).currentSettings()
         val mimeType = mimeTypeFor(media)
@@ -62,7 +69,7 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
         }
 
         return try {
-            downloadTo(target.uri, media)
+            downloadTo(target.uri, media, queueIndex, queueTotal)
             MediaStoreSaver.finalize(applicationContext, target, mimeType)
 
             YoinkDatabase.getInstance(applicationContext).downloadDao().insert(
@@ -71,13 +78,12 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
                     platform = media.platform.name,
                     mediaType = media.mediaType.name,
                     mediaUri = target.uri.toString(),
-                    timestamp = System.currentTimeMillis(),
-                    isPartialCarousel = media.isPartialCarousel
+                    timestamp = System.currentTimeMillis()
                 )
             )
 
             DownloadNotifier.showResultNotification(applicationContext, resultNotificationId(), success = true)
-            Result.success(workDataOf(KEY_MEDIA_URI to target.uri.toString(), KEY_IS_PARTIAL_CAROUSEL to media.isPartialCarousel))
+            Result.success(workDataOf(KEY_MEDIA_URI to target.uri.toString()))
         } catch (e: IOException) {
             MediaStoreSaver.abandon(applicationContext, target)
             DownloadNotifier.showResultNotification(applicationContext, resultNotificationId(), success = false)
@@ -89,10 +95,10 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
         }
     }
 
-    private suspend fun downloadTo(uri: Uri, media: ExtractedMedia) {
+    private suspend fun downloadTo(uri: Uri, media: ExtractedMedia, queueIndex: Int, queueTotal: Int) {
         val request = Request.Builder()
             .url(media.mediaUrl)
-            .header("Referer", refererFor(media.platform))
+            .header("Referer", NetworkClient.refererFor(media.platform))
             .build()
 
         NetworkClient.client.newCall(request).execute().use { response ->
@@ -118,7 +124,7 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
                             if (percent != lastReportedPercent) {
                                 lastReportedPercent = percent
                                 setProgress(workDataOf(KEY_PROGRESS_PERCENT to percent))
-                                setForeground(createForegroundInfo(percent, indeterminate = false))
+                                setForeground(createForegroundInfo(percent, indeterminate = false, queueIndex, queueTotal))
                             }
                         }
                     }
@@ -127,8 +133,9 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
         }
     }
 
-    private fun createForegroundInfo(percent: Int, indeterminate: Boolean): ForegroundInfo {
-        val notification: Notification = DownloadNotifier.progressNotification(applicationContext, percent, indeterminate)
+    private fun createForegroundInfo(percent: Int, indeterminate: Boolean, queueIndex: Int, queueTotal: Int): ForegroundInfo {
+        val notification: Notification =
+            DownloadNotifier.progressNotification(applicationContext, percent, indeterminate, queueIndex, queueTotal)
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ForegroundInfo(
                 DownloadNotifier.PROGRESS_NOTIFICATION_ID,
@@ -143,12 +150,6 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
     private fun resultNotificationId(): Int = (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
 
     private fun errorData(reason: ExtractionError): Data = workDataOf(KEY_ERROR_REASON to reason.name)
-
-    private fun refererFor(platform: Platform): String = when (platform) {
-        Platform.TWITTER -> "https://twitter.com/"
-        Platform.INSTAGRAM -> "https://www.instagram.com/"
-        Platform.PINTEREST -> "https://www.pinterest.com/"
-    }
 
     private fun mimeTypeFor(media: ExtractedMedia): String {
         if (media.mediaType.isVideoLike) return "video/mp4"
@@ -168,20 +169,29 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
     }
 
     companion object {
-        const val KEY_SOURCE_URL = "source_url"
+        const val KEY_MEDIA_URL = "media_url"
+        const val KEY_MEDIA_TYPE = "media_type"
         const val KEY_PLATFORM = "platform"
+        const val KEY_SOURCE_URL = "source_url"
+        const val KEY_THUMBNAIL_URL = "thumbnail_url"
+        const val KEY_QUEUE_INDEX = "queue_index"
+        const val KEY_QUEUE_TOTAL = "queue_total"
         const val KEY_PROGRESS_PERCENT = "progress_percent"
         const val KEY_ERROR_REASON = "error_reason"
         const val KEY_MEDIA_URI = "media_uri"
-        const val KEY_IS_PARTIAL_CAROUSEL = "is_partial_carousel"
         private const val BUFFER_SIZE = 8 * 1024
 
-        fun buildRequest(sourceUrl: String, platform: Platform): OneTimeWorkRequest =
+        fun buildRequest(media: ExtractedMedia, queueIndex: Int = 1, queueTotal: Int = 1): OneTimeWorkRequest =
             OneTimeWorkRequest.Builder(DownloadWorker::class.java)
                 .setInputData(
                     workDataOf(
-                        KEY_SOURCE_URL to sourceUrl,
-                        KEY_PLATFORM to platform.name
+                        KEY_MEDIA_URL to media.mediaUrl,
+                        KEY_MEDIA_TYPE to media.mediaType.name,
+                        KEY_PLATFORM to media.platform.name,
+                        KEY_SOURCE_URL to media.sourceUrl,
+                        KEY_THUMBNAIL_URL to media.thumbnailUrl,
+                        KEY_QUEUE_INDEX to queueIndex,
+                        KEY_QUEUE_TOTAL to queueTotal
                     )
                 )
                 .build()

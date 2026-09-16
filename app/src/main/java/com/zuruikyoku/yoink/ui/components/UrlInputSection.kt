@@ -28,14 +28,19 @@ import com.zuruikyoku.yoink.data.platform.Platform
 fun UrlInputSection(
     url: String,
     detectedPlatform: Platform?,
+    isExtracting: Boolean,
     isDownloading: Boolean,
     progressPercent: Int,
+    queueIndex: Int,
+    queueTotal: Int,
     errorMessageRes: Int?,
     onUrlChanged: (String) -> Unit,
     onClear: () -> Unit,
     onDownloadClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val busy = isExtracting || isDownloading
+
     Column(modifier = modifier.fillMaxWidth()) {
         OutlinedTextField(
             value = url,
@@ -54,7 +59,7 @@ fun UrlInputSection(
             } else null,
             singleLine = true,
             isError = errorMessageRes != null,
-            enabled = !isDownloading,
+            enabled = !busy,
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = MaterialTheme.colorScheme.primary,
                 cursorColor = MaterialTheme.colorScheme.primary
@@ -74,7 +79,7 @@ fun UrlInputSection(
 
         Button(
             onClick = onDownloadClick,
-            enabled = url.isNotBlank() && !isDownloading,
+            enabled = url.isNotBlank() && !busy,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(52.dp),
@@ -83,12 +88,13 @@ fun UrlInputSection(
                 contentColor = MaterialTheme.colorScheme.onPrimary
             )
         ) {
-            Text(
-                text = stringResource(
-                    if (isDownloading) R.string.downloading_button else R.string.download_button
-                ),
-                style = MaterialTheme.typography.titleMedium
-            )
+            val label = when {
+                isExtracting -> stringResource(R.string.checking_button)
+                isDownloading && queueTotal > 1 -> stringResource(R.string.downloading_button_indexed, queueIndex, queueTotal)
+                isDownloading -> stringResource(R.string.downloading_button)
+                else -> stringResource(R.string.download_button)
+            }
+            Text(text = label, style = MaterialTheme.typography.titleMedium)
         }
 
         AnimatedVisibility(visible = isDownloading) {
@@ -110,4 +116,3 @@ fun UrlInputSection(
         }
     }
 }
-

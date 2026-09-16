@@ -12,7 +12,5 @@ data class ExtractedMedia(
     val mediaType: MediaType,
     val platform: Platform,
     val sourceUrl: String,
-    val thumbnailUrl: String? = null,
-    /** True when the source post had multiple items and only the first was grabbed. */
-    val isPartialCarousel: Boolean = false
+    val thumbnailUrl: String? = null
 )
