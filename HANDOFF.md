@@ -28,13 +28,19 @@ network-enabled session is to actually build and test this for the first time.
 ## Next steps, in order
 
 1. **Get a real compile.** Run `./gradlew assembleDebug` (or open in Android
-   Studio). Expect dependency-version friction — versions in
-   `app/build.gradle.kts` and the root `build.gradle.kts` (AGP 8.7.3, Kotlin
-   2.0.21, Compose BOM 2024.12.01, Room 2.6.1, WorkManager 2.10.0, DataStore
-   1.1.1, Coil 2.7.0, navigation-compose 2.8.5, etc.) were best-confidence
-   guesses at versions that work together, not verified against what's actually
-   current — bump anything Android Studio/Gradle flags as unresolvable or
-   suggests updating.
+   Studio). A `.claude/hooks/session-start.sh` SessionStart hook is already in
+   the repo and should auto-provision the Android SDK (checks `$ANDROID_HOME`,
+   then a cached prior install, then downloads cmdline-tools + platform-tools +
+   `platforms;android-35` + `build-tools;35.0.0`) — check its output on first
+   run in a new session; the download/`sdkmanager` step itself was never
+   verified against a real network (it was written and locally sanity-checked
+   in the same blocked sandbox as everything else here). Separately, expect
+   dependency-version friction — versions in `app/build.gradle.kts` and the
+   root `build.gradle.kts` (AGP 8.7.3, Kotlin 2.0.21, Compose BOM 2024.12.01,
+   Room 2.6.1, WorkManager 2.10.0, DataStore 1.1.1, Coil 2.7.0,
+   navigation-compose 2.8.5, etc.) were best-confidence guesses at versions
+   that work together, not verified against what's actually current — bump
+   anything Android Studio/Gradle flags as unresolvable or suggests updating.
 
 2. **Test the URL-detection/share-intent/download flow end to end** on a device
    or emulator with a real Twitter/X link first — `TwitterExtractor` is the most
