@@ -5,7 +5,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
-import androidx.work.getWorkInfoByIdFlow
 import com.zuruikyoku.yoink.R
 import com.zuruikyoku.yoink.data.clipboard.ClipboardHelper
 import com.zuruikyoku.yoink.data.db.DownloadEntity

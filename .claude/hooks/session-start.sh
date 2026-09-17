@@ -47,10 +47,12 @@ else
   fi
 fi
 
-{
-  echo "export ANDROID_HOME=\"$ANDROID_SDK_DIR\""
-  echo "export ANDROID_SDK_ROOT=\"$ANDROID_SDK_DIR\""
-  echo "export PATH=\"\$PATH:$ANDROID_SDK_DIR/cmdline-tools/latest/bin:$ANDROID_SDK_DIR/platform-tools\""
-} >> "$CLAUDE_ENV_FILE"
+if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+  {
+    echo "export ANDROID_HOME=\"$ANDROID_SDK_DIR\""
+    echo "export ANDROID_SDK_ROOT=\"$ANDROID_SDK_DIR\""
+    echo "export PATH=\"\$PATH:$ANDROID_SDK_DIR/cmdline-tools/latest/bin:$ANDROID_SDK_DIR/platform-tools\""
+  } >> "$CLAUDE_ENV_FILE"
+fi
 
 echo "ANDROID_HOME set to $ANDROID_SDK_DIR"
