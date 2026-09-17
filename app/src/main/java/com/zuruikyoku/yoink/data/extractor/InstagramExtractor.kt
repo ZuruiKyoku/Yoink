@@ -10,16 +10,26 @@ import org.json.JSONObject
 import java.io.IOException
 
 /**
- * Pulls media from public Instagram posts/reels/carousels. Tries the post page's embedded
- * JSON state first (which, for a multi-item carousel, lists every slide under
- * `edge_sidecar_to_children`); if that shape isn't found or fails to parse, falls back to
- * the Open Graph tags Instagram server-renders for link previews, which only ever expose
- * the first item. Needs no login and no JS execution. Breaks independently of the
- * Twitter/Pinterest extractors if Instagram changes its markup.
+ * Pulls media from public Instagram posts/reels/carousels. Instagram increasingly serves a
+ * near-empty shell (or a login wall) to plain unauthenticated requests, so this tries a few
+ * independent approaches in order and takes whichever one turns up usable data first:
+ *
+ * 1. The `?__a=1&__d=dis` pseudo-API response, with the `X-IG-App-ID` header Instagram's own
+ *    web client sends — a long-standing, widely-documented public web client id, not a secret.
+ * 2. The post page's embedded JSON state (which, for a carousel, lists every slide under
+ *    `edge_sidecar_to_children` in the older shape, or `carousel_media` in the newer one).
+ * 3. The Open Graph tags Instagram server-renders for link previews — only ever the first item.
+ *
+ * Needs no login and no JS execution. Breaks independently of the Twitter/Pinterest
+ * extractors if Instagram changes its markup or blocks anonymous requests harder.
  */
 class InstagramExtractor : MediaExtractor {
 
     override val platform = Platform.INSTAGRAM
+
+    // Instagram's own website sends this as its web client id on internal API calls; it's a
+    // long-lived public constant referenced across many independent tools, not a real secret.
+    private val webAppIdHeader = "X-IG-App-ID" to "936619743392459"
 
     private val postUrlRegex = Regex(
         """instagram\.com/(?:p|reel|reels|tv)/[A-Za-z0-9_-]+""",
@@ -40,73 +50,141 @@ class InstagramExtractor : MediaExtractor {
             return@withContext ExtractionResult.Error(ExtractionError.INVALID_URL)
         }
 
+        // Best-effort first try; any failure here just falls through to the HTML fetch below,
+        // which is the one that gets to report a real network error / not-found.
+        fetchViaPseudoApi(url)?.let { return@withContext it }
+
+        val html = when (val fetch = fetchHtml(url)) {
+            is HtmlFetch.Failed -> return@withContext ExtractionResult.Error(fetch.reason)
+            is HtmlFetch.Success -> fetch.body
+        }
+
+        parseHtml(html, url)?.let { return@withContext it }
+        ExtractionResult.Error(ExtractionError.NO_MEDIA_FOUND)
+    }
+
+    private sealed class HtmlFetch {
+        data class Success(val body: String) : HtmlFetch()
+        data class Failed(val reason: ExtractionError) : HtmlFetch()
+    }
+
+    /** Attempt 1: the `?__a=1&__d=dis` JSON response. Returns null (not a hard error) on any failure so the caller falls through to the HTML approach. */
+    private fun fetchViaPseudoApi(url: String): ExtractionResult? {
+        val base = url.substringBefore('?').trimEnd('/')
+        val apiUrl = "$base/?__a=1&__d=dis"
+
+        val request = Request.Builder()
+            .url(apiUrl)
+            .header(webAppIdHeader.first, webAppIdHeader.second)
+            .header("Accept", "*/*")
+            .build()
+
+        val body = try {
+            NetworkClient.client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return null
+                response.body?.string()
+            }
+        } catch (e: IOException) {
+            return null
+        }
+
+        if (body.isNullOrBlank()) return null
+
+        val root = try {
+            JSONObject(body)
+        } catch (e: Exception) {
+            return null
+        }
+
+        val items = mediaFromRoot(root, url)
+        return if (items.isNullOrEmpty()) null else ExtractionResult.Success(items)
+    }
+
+    private fun fetchHtml(url: String): HtmlFetch {
         val request = Request.Builder()
             .url(url)
+            .header(webAppIdHeader.first, webAppIdHeader.second)
             .header("Accept", "text/html,application/xhtml+xml")
             .build()
 
-        val html = try {
+        return try {
             NetworkClient.client.newCall(request).execute().use { response ->
                 when {
-                    response.code == 404 ->
-                        return@withContext ExtractionResult.Error(ExtractionError.NOT_FOUND_OR_PRIVATE)
-                    !response.isSuccessful ->
-                        return@withContext ExtractionResult.Error(ExtractionError.NETWORK_ERROR)
-                    else -> response.body?.string()
+                    response.code == 404 -> HtmlFetch.Failed(ExtractionError.NOT_FOUND_OR_PRIVATE)
+                    !response.isSuccessful -> HtmlFetch.Failed(ExtractionError.NETWORK_ERROR)
+                    else -> {
+                        val body = response.body?.string()
+                        if (body.isNullOrBlank()) {
+                            HtmlFetch.Failed(ExtractionError.NOT_FOUND_OR_PRIVATE)
+                        } else {
+                            HtmlFetch.Success(body)
+                        }
+                    }
                 }
             }
         } catch (e: IOException) {
-            return@withContext ExtractionResult.Error(ExtractionError.NETWORK_ERROR, e)
+            HtmlFetch.Failed(ExtractionError.NETWORK_ERROR)
         }
-
-        if (html.isNullOrBlank()) {
-            return@withContext ExtractionResult.Error(ExtractionError.NOT_FOUND_OR_PRIVATE)
-        }
-
-        parseHtml(html, url)
     }
 
-    private fun parseHtml(html: String, sourceUrl: String): ExtractionResult {
+    private fun parseHtml(html: String, sourceUrl: String): ExtractionResult? {
         if (html.contains("Sorry, this page isn't available") ||
-            html.contains("This account is private")
+            html.contains("This account is private") ||
+            html.contains("Log in to see photos")
         ) {
             return ExtractionResult.Error(ExtractionError.NOT_FOUND_OR_PRIVATE)
         }
 
-        val carouselItems = extractCarouselFromEmbeddedJson(html, sourceUrl)
-        if (!carouselItems.isNullOrEmpty()) {
-            return ExtractionResult.Success(carouselItems)
-        }
-
-        val single = extractFromOgTags(html, sourceUrl)
-            ?: return ExtractionResult.Error(ExtractionError.NO_MEDIA_FOUND)
-        return ExtractionResult.Success(listOf(single))
-    }
-
-    /** Best-effort: looks for a sidecar (carousel) node in any embedded JSON blob. Null/empty means "not found". */
-    private fun extractCarouselFromEmbeddedJson(html: String, sourceUrl: String): List<ExtractedMedia>? {
         for (match in jsonScriptRegex.findAll(html)) {
             val root = try {
                 JSONObject(match.groupValues[1])
             } catch (e: Exception) {
                 continue
             }
+            mediaFromRoot(root, sourceUrl)?.let { return ExtractionResult.Success(it) }
+        }
 
-            val sidecar = deepFind(root) { key, value ->
-                key == "edge_sidecar_to_children" && value is JSONObject && value.has("edges")
-            } as? JSONObject ?: continue
+        val single = extractFromOgTags(html, sourceUrl) ?: return null
+        return ExtractionResult.Success(listOf(single))
+    }
 
-            val edges = sidecar.optJSONArray("edges") ?: continue
+    /**
+     * Tries every media shape we know Instagram has used, anywhere in [root]: the older
+     * GraphQL `edge_sidecar_to_children` carousel, the newer mobile-API `carousel_media`
+     * array, and a handful of single-item field layouts. Returns null if none matched.
+     */
+    private fun mediaFromRoot(root: JSONObject, sourceUrl: String): List<ExtractedMedia>? {
+        (deepFind(root) { key, value ->
+            key == "edge_sidecar_to_children" && value is JSONObject && value.has("edges")
+        } as? JSONObject)?.optJSONArray("edges")?.let { edges ->
             val items = (0 until edges.length()).mapNotNull { i ->
-                val node = edges.optJSONObject(i)?.optJSONObject("node") ?: return@mapNotNull null
-                nodeToMedia(node, sourceUrl)
+                edges.optJSONObject(i)?.optJSONObject("node")?.let { sidecarNodeToMedia(it, sourceUrl) }
             }
             if (items.isNotEmpty()) return items
         }
+
+        (deepFind(root) { key, value -> key == "carousel_media" && value is JSONArray } as? JSONArray)?.let { carousel ->
+            val items = (0 until carousel.length()).mapNotNull { i ->
+                carousel.optJSONObject(i)?.let { apiItemToMedia(it, sourceUrl) }
+            }
+            if (items.isNotEmpty()) return items
+        }
+
+        val singleCandidates = listOfNotNull(
+            root.optJSONArray("items")?.optJSONObject(0),
+            deepFind(root) { key, _ -> key == "shortcode_media" } as? JSONObject,
+            root
+        )
+        for (candidate in singleCandidates) {
+            apiItemToMedia(candidate, sourceUrl)?.let { return listOf(it) }
+            sidecarNodeToMedia(candidate, sourceUrl)?.let { return listOf(it) }
+        }
+
         return null
     }
 
-    private fun nodeToMedia(node: JSONObject, sourceUrl: String): ExtractedMedia? {
+    /** Older GraphQL shape: display_url / video_url / is_video directly on the node. */
+    private fun sidecarNodeToMedia(node: JSONObject, sourceUrl: String): ExtractedMedia? {
         val displayUrl = node.optString("display_url").takeIf { it.isNotBlank() }
         return if (node.optBoolean("is_video")) {
             val videoUrl = node.optString("video_url").takeIf { it.isNotBlank() } ?: return null
@@ -121,6 +199,30 @@ class InstagramExtractor : MediaExtractor {
             displayUrl?.let {
                 ExtractedMedia(mediaUrl = it, mediaType = MediaType.IMAGE, platform = platform, sourceUrl = sourceUrl)
             }
+        }
+    }
+
+    /** Newer mobile-API shape: image_versions2.candidates[0].url / video_versions[0].url. */
+    private fun apiItemToMedia(item: JSONObject, sourceUrl: String): ExtractedMedia? {
+        val imageUrl = item.optJSONObject("image_versions2")
+            ?.optJSONArray("candidates")?.optJSONObject(0)?.optString("url")?.takeIf { it.isNotBlank() }
+        val videoUrl = item.optJSONArray("video_versions")?.optJSONObject(0)?.optString("url")?.takeIf { it.isNotBlank() }
+
+        return when {
+            !videoUrl.isNullOrBlank() -> ExtractedMedia(
+                mediaUrl = videoUrl,
+                mediaType = MediaType.VIDEO,
+                platform = platform,
+                sourceUrl = sourceUrl,
+                thumbnailUrl = imageUrl
+            )
+            !imageUrl.isNullOrBlank() -> ExtractedMedia(
+                mediaUrl = imageUrl,
+                mediaType = MediaType.IMAGE,
+                platform = platform,
+                sourceUrl = sourceUrl
+            )
+            else -> null
         }
     }
 

@@ -8,13 +8,17 @@ import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import kotlin.math.abs
 
 /**
  * Pulls the original-resolution image, or the best video variant, from a Pinterest pin
- * page's embedded JSON (the Redux state Pinterest server-renders into a `<script
- * type="application/json">` block). Falls back to Open Graph tags if that blob can't be
- * found or parsed. Breaks independently of the Twitter/Instagram extractors if Pinterest
- * reshapes its page data.
+ * page's embedded JSON. Pinterest's exact wrapper markup for that JSON (which `<script>`
+ * tag, what it's keyed under) has changed shape more than once, so the primary strategy
+ * is a raw scan of the whole HTML for `"url":"...mp4..."` occurrences anchored near the
+ * pin's own numeric id — that survives a wrapper-shape change that would break a
+ * structured `<script type="application/json">` parse. The structured parse and Open
+ * Graph tags are kept as fallbacks. Breaks independently of the Twitter/Instagram
+ * extractors if Pinterest reshapes its page data again.
  */
 class PinterestExtractor : MediaExtractor {
 
@@ -25,10 +29,19 @@ class PinterestExtractor : MediaExtractor {
         RegexOption.IGNORE_CASE
     )
 
+    // Deliberately lenient (leading digits only, whatever follows) rather than requiring the
+    // whole path segment to be numeric — this is only used to anchor the raw-text video scan
+    // below, so a wrong guess about Pinterest's URL shape just degrades that anchoring, it
+    // doesn't reject a link pinUrlRegex above would otherwise accept.
+    private val pinIdRegex = Regex("""pin/(\d+)""")
+
     private val jsonScriptRegex = Regex(
         """<script[^>]+type="application/json"[^>]*>(.*?)</script>""",
         setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)
     )
+
+    private val rawMp4UrlRegex = Regex(""""url"\s*:\s*"([^"]+?\.mp4[^"]*?)"""")
+    private val resolutionHintRegex = Regex("""(\d{3,4})p""", RegexOption.IGNORE_CASE)
 
     private val metaTagRegex = Regex("""<meta\s+[^>]*>""", RegexOption.IGNORE_CASE)
     private val propertyAttrRegex = Regex("""property\s*=\s*"([^"]*)"""")
@@ -38,6 +51,7 @@ class PinterestExtractor : MediaExtractor {
         if (!pinUrlRegex.containsMatchIn(url)) {
             return@withContext ExtractionResult.Error(ExtractionError.INVALID_URL)
         }
+        val pinId = pinIdRegex.find(url)?.groupValues?.get(1)
 
         val request = Request.Builder()
             .url(url)
@@ -64,15 +78,20 @@ class PinterestExtractor : MediaExtractor {
             return@withContext ExtractionResult.Error(ExtractionError.NOT_FOUND_OR_PRIVATE)
         }
 
-        parseHtml(html, resolvedUrl)
+        // The pin id in the URL, re-extracted from wherever we actually landed (a pin.it
+        // short link resolves to a full pinterest.com/pin/<id>/ URL by the time we get here).
+        val resolvedPinId = pinId ?: pinIdRegex.find(resolvedUrl)?.groupValues?.get(1)
+
+        parseHtml(html, resolvedUrl, resolvedPinId)
     }
 
-    private fun parseHtml(html: String, sourceUrl: String): ExtractionResult {
+    private fun parseHtml(html: String, sourceUrl: String, pinId: String?): ExtractionResult {
         if (html.contains("Sorry! We couldn't find that page")) {
             return ExtractionResult.Error(ExtractionError.NOT_FOUND_OR_PRIVATE)
         }
 
-        val (videoUrl, imageUrl) = extractFromEmbeddedJson(html)
+        val videoUrl = bestMp4UrlNearPin(html, pinId)
+        val imageUrl = extractOrigImageFromEmbeddedJson(html)
 
         val media = when {
             !videoUrl.isNullOrBlank() -> ExtractedMedia(
@@ -103,41 +122,60 @@ class PinterestExtractor : MediaExtractor {
         return ExtractionResult.Success(listOf(media))
     }
 
-    /** Returns (bestVideoUrl, origImageUrl) found anywhere in the page's JSON state blobs. */
-    private fun extractFromEmbeddedJson(html: String): Pair<String?, String?> {
-        var bestVideoUrl: String? = null
-        var bestVideoWidth = -1
-        var origImageUrl: String? = null
+    /**
+     * Scans the raw HTML text for `"url":"...mp4..."` occurrences instead of parsing a
+     * specific `<script>` tag's JSON — a pin page embeds dozens of *other* pins' data too
+     * (related/recommended pins), so candidates are anchored to whichever one sits nearest
+     * an occurrence of this pin's own numeric id, and ranked by an inferred resolution
+     * (Pinterest's CDN paths usually embed it, e.g. ".../1080p/...") when several are
+     * similarly close.
+     */
+    private fun bestMp4UrlNearPin(html: String, pinId: String?): String? {
+        val candidates = rawMp4UrlRegex.findAll(html)
+            .map { it.range.first to unescapeJson(it.groupValues[1]) }
+            .distinctBy { it.second }
+            .toList()
+        if (candidates.isEmpty()) return null
 
+        val anchors = if (pinId != null) {
+            Regex(""""id"\s*:\s*"?$pinId"?""").findAll(html).map { it.range.first }.toList()
+        } else {
+            emptyList()
+        }
+
+        fun resolutionOf(url: String) = resolutionHintRegex.find(url)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+
+        if (anchors.isEmpty()) {
+            // No id to anchor to (or it wasn't found in the markup) — best-effort: highest inferred resolution.
+            return candidates.maxByOrNull { resolutionOf(it.second) }?.second
+        }
+
+        val maxReasonableDistance = 20_000
+        val nearby = candidates
+            .map { (pos, url) -> Triple(pos, url, anchors.minOf { abs(it - pos) }) }
+            .filter { it.third <= maxReasonableDistance }
+
+        return if (nearby.isNotEmpty()) {
+            nearby.minWithOrNull(compareBy({ it.third }, { -resolutionOf(it.second) }))?.second
+        } else {
+            candidates.maxByOrNull { resolutionOf(it.second) }?.second
+        }
+    }
+
+    private fun extractOrigImageFromEmbeddedJson(html: String): String? {
         for (match in jsonScriptRegex.findAll(html)) {
             val root = try {
                 JSONObject(match.groupValues[1])
             } catch (e: Exception) {
                 continue
             }
-
-            if (origImageUrl == null) {
-                val imagesNode = deepFind(root) { key, value ->
-                    key == "images" && value is JSONObject && value.has("orig")
-                } as? JSONObject
-                origImageUrl = imagesNode?.optJSONObject("orig")?.optString("url")?.takeIf { it.isNotBlank() }
-            }
-
-            val videoListNode = deepFind(root) { key, value -> key == "video_list" && value is JSONObject } as? JSONObject
-            videoListNode?.keys()?.forEach { variantKey ->
-                val variant = videoListNode.optJSONObject(variantKey) ?: return@forEach
-                val width = variant.optInt("width", -1)
-                val variantUrl = variant.optString("url").takeIf { it.isNotBlank() } ?: return@forEach
-                if (width > bestVideoWidth) {
-                    bestVideoWidth = width
-                    bestVideoUrl = variantUrl
-                }
-            }
-
-            if (origImageUrl != null && bestVideoUrl != null) break
+            val imagesNode = deepFind(root) { key, value ->
+                key == "images" && value is JSONObject && value.has("orig")
+            } as? JSONObject
+            val origUrl = imagesNode?.optJSONObject("orig")?.optString("url")?.takeIf { it.isNotBlank() }
+            if (origUrl != null) return origUrl
         }
-
-        return bestVideoUrl to origImageUrl
+        return null
     }
 
     private fun deepFind(node: Any?, predicate: (String, Any?) -> Boolean): Any? {
@@ -172,7 +210,7 @@ class PinterestExtractor : MediaExtractor {
             val content = contentAttrRegex.find(tag)?.groupValues?.get(1) ?: continue
             tags[property] = content
         }
-        val video = tags["og:video"] ?: tags["og:video:url"]
+        val video = tags["og:video"] ?: tags["og:video:url"] ?: tags["og:video:secure_url"]
         if (!video.isNullOrBlank()) return unescapeHtml(video) to true
         val image = tags["og:image"] ?: return null
         return unescapeHtml(image) to false
@@ -184,4 +222,8 @@ class PinterestExtractor : MediaExtractor {
         .replace("&#039;", "'")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
+
+    private fun unescapeJson(value: String): String = value
+        .replace("\\/", "/")
+        .replace("\\u0026", "&")
 }
