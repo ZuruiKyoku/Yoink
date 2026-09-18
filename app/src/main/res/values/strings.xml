@@ -12,7 +12,8 @@
     <string name="checking_button">Checking…</string>
     <string name="clear_input">Clear</string>
     <string name="platform_unknown">Unrecognized link</string>
-    <string name="error_invalid_url">That doesn\'t look like a Twitter/X, Instagram, or Pinterest link.</string>
+    <string name="error_invalid_url">That doesn\'t look like a Twitter/X or Pinterest link.</string>
+    <string name="error_instagram_unsupported">Instagram isn\'t supported right now.</string>
     <string name="error_no_media">Couldn\'t find any media on that post.</string>
     <string name="error_private_or_deleted">This post looks private, deleted, or otherwise off-limits.</string>
     <string name="error_network">Network hiccup — check your connection and try again.</string>

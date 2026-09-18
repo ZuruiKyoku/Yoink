@@ -84,15 +84,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun applyDetectedText(text: String?) {
         val detected = UrlDetector.detect(text) ?: return
         _uiState.update {
-            it.copy(urlInput = detected.url, detectedPlatform = detected.platform, errorMessageRes = null)
+            it.copy(
+                urlInput = detected.url,
+                detectedPlatform = detected.platform,
+                errorMessageRes = unsupportedPlatformErrorRes(detected.platform)
+            )
         }
     }
 
     fun onUrlChanged(newValue: String) {
         val detected = UrlDetector.detect(newValue)
         _uiState.update {
-            it.copy(urlInput = newValue, detectedPlatform = detected?.platform, errorMessageRes = null)
+            it.copy(
+                urlInput = newValue,
+                detectedPlatform = detected?.platform,
+                errorMessageRes = detected?.let { d -> unsupportedPlatformErrorRes(d.platform) }
+            )
         }
+    }
+
+    // Instagram extraction is disabled for now (see ExtractorRegistry/InstagramExtractor) -
+    // surface a clear notice as soon as such a link is recognized instead of letting it fail
+    // silently through the normal extraction path.
+    private fun unsupportedPlatformErrorRes(platform: Platform): Int? = when (platform) {
+        Platform.INSTAGRAM -> R.string.error_instagram_unsupported
+        else -> null
     }
 
     fun onClear() {
@@ -113,6 +129,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val detected = UrlDetector.detect(state.urlInput)
         if (detected == null) {
             _uiState.update { it.copy(errorMessageRes = R.string.error_invalid_url) }
+            return
+        }
+        unsupportedPlatformErrorRes(detected.platform)?.let { unsupportedRes ->
+            _uiState.update { it.copy(errorMessageRes = unsupportedRes) }
             return
         }
 
