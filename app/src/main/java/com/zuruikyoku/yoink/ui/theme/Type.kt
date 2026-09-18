@@ -16,6 +16,7 @@ import com.zuruikyoku.yoink.R
 
 // Space Grotesk is a single variable font file; each weight is pulled from it via
 // FontVariation so we don't need to bundle a separate static file per weight.
+@OptIn(ExperimentalTextApi::class)
 private fun spaceGrotesk(weight: FontWeight) = Font(
     resId = R.font.space_grotesk,
     weight = weight,
