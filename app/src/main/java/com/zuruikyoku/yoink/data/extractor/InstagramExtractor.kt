@@ -53,6 +53,10 @@ class InstagramExtractor : MediaExtractor {
     // shell, but Instagram still renders real Open Graph tags for this one.
     private val linkPreviewUserAgent = "WhatsApp/2.23.20.0"
 
+    private companion object {
+        const val MAX_HTML_FETCH_ATTEMPTS = 4
+    }
+
     private val postUrlRegex = Regex(
         """instagram\.com/(?:p|reel|reels|tv)/[A-Za-z0-9_-]+""",
         RegexOption.IGNORE_CASE
@@ -124,14 +128,21 @@ class InstagramExtractor : MediaExtractor {
     }
 
     private suspend fun fetchHtml(url: String): HtmlFetch {
-        val first = fetchHtmlOnce(url)
-        // Observed live: this occasionally 302s with an empty body for no discernible reason,
-        // even on an identical immediate retry of the same URL, and clears up on its own.
-        if (first is HtmlFetch.Failed && first.reason == ExtractionError.NETWORK_ERROR) {
-            delay(500)
-            return fetchHtmlOnce(url)
+        // Observed live: this edge fails with an empty-body, non-2xx response for no
+        // discernible reason on a large, measured fraction of requests (~40-50% in testing,
+        // regardless of which post or which link-preview UA) - a single retry only halves
+        // that, leaving a user-visible failure rate a real person will still hit. Retries a
+        // few times with backoff before giving up for good.
+        var lastFailure: HtmlFetch.Failed? = null
+        for (attempt in 0 until MAX_HTML_FETCH_ATTEMPTS) {
+            if (attempt > 0) delay(attempt * 500L)
+            val result = fetchHtmlOnce(url)
+            if (result is HtmlFetch.Success) return result
+            result as HtmlFetch.Failed
+            if (result.reason != ExtractionError.NETWORK_ERROR) return result
+            lastFailure = result
         }
-        return first
+        return lastFailure ?: HtmlFetch.Failed(ExtractionError.NETWORK_ERROR)
     }
 
     private fun fetchHtmlOnce(url: String): HtmlFetch {
