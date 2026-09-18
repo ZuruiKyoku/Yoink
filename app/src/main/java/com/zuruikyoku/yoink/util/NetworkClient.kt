@@ -31,11 +31,16 @@ object NetworkClient {
 
     private class DefaultHeadersInterceptor : Interceptor {
         override fun intercept(chain: Interceptor.Chain): Response {
-            val request = chain.request().newBuilder()
-                .header("User-Agent", DESKTOP_USER_AGENT)
+            val original = chain.request()
+            val builder = original.newBuilder()
                 .header("Accept-Language", "en-US,en;q=0.9")
-                .build()
-            return chain.proceed(request)
+            // A request can set its own User-Agent (e.g. InstagramExtractor's link-preview
+            // UA) to get different server-side treatment; only fall back to the desktop one
+            // when the caller didn't ask for something specific.
+            if (original.header("User-Agent") == null) {
+                builder.header("User-Agent", DESKTOP_USER_AGENT)
+            }
+            return chain.proceed(builder.build())
         }
     }
 }

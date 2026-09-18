@@ -3,6 +3,7 @@ package com.zuruikyoku.yoink.data.extractor
 import com.zuruikyoku.yoink.data.platform.Platform
 import com.zuruikyoku.yoink.util.NetworkClient
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.Request
 import org.json.JSONArray
@@ -10,15 +11,32 @@ import org.json.JSONObject
 import java.io.IOException
 
 /**
- * Pulls media from public Instagram posts/reels/carousels. Instagram increasingly serves a
- * near-empty shell (or a login wall) to plain unauthenticated requests, so this tries a few
- * independent approaches in order and takes whichever one turns up usable data first:
+ * Pulls media from public Instagram posts/reels/carousels. Verified live (Sept 2026): a plain
+ * browser User-Agent now gets an empty React shell with no OG tags and no embedded post JSON
+ * at all, regardless of headers — the `?__a=1&__d=dis` pseudo-API is fully dead (500/404).
+ * The one thing that still works anonymously is that Instagram must keep serving real Open
+ * Graph tags to known link-preview crawlers (WhatsApp, iMessage, etc.) since its own ecosystem
+ * depends on those unfurling correctly — spoofing that UA for the HTML fetch is what actually
+ * unlocks real data. That edge also occasionally 302s with an empty body for no discernible
+ * reason (observed even on identical back-to-back requests) and succeeds on a bare retry, so
+ * [fetchHtml] retries once.
+ *
+ * This only recovers a single cover image per post (real Open Graph `og:video` tags are gone
+ * too) — a carousel or Reel yields just its first-slide/cover photo, not the full set or the
+ * actual video. There's no known anonymous-HTTP path to the real carousel list or video URL
+ * anymore; that would need a logged-in session or JS execution, both out of scope here.
+ *
+ * Tries a few independent approaches in order and takes whichever one turns up usable data
+ * first:
  *
  * 1. The `?__a=1&__d=dis` pseudo-API response, with the `X-IG-App-ID` header Instagram's own
  *    web client sends — a long-standing, widely-documented public web client id, not a secret.
+ *    Kept in case Instagram re-enables it; currently always falls through.
  * 2. The post page's embedded JSON state (which, for a carousel, lists every slide under
  *    `edge_sidecar_to_children` in the older shape, or `carousel_media` in the newer one).
- * 3. The Open Graph tags Instagram server-renders for link previews — only ever the first item.
+ *    Kept for the same reason; currently always falls through too.
+ * 3. The Open Graph tags Instagram server-renders for link previews — only ever the first item,
+ *    and image-only. This is the one that actually returns data today.
  *
  * Needs no login and no JS execution. Breaks independently of the Twitter/Pinterest
  * extractors if Instagram changes its markup or blocks anonymous requests harder.
@@ -30,6 +48,10 @@ class InstagramExtractor : MediaExtractor {
     // Instagram's own website sends this as its web client id on internal API calls; it's a
     // long-lived public constant referenced across many independent tools, not a real secret.
     private val webAppIdHeader = "X-IG-App-ID" to "936619743392459"
+
+    // Confirmed live: a normal desktop/mobile browser UA gets stonewalled with an empty app
+    // shell, but Instagram still renders real Open Graph tags for this one.
+    private val linkPreviewUserAgent = "WhatsApp/2.23.20.0"
 
     private val postUrlRegex = Regex(
         """instagram\.com/(?:p|reel|reels|tv)/[A-Za-z0-9_-]+""",
@@ -76,6 +98,7 @@ class InstagramExtractor : MediaExtractor {
         val request = Request.Builder()
             .url(apiUrl)
             .header(webAppIdHeader.first, webAppIdHeader.second)
+            .header("User-Agent", linkPreviewUserAgent)
             .header("Accept", "*/*")
             .build()
 
@@ -100,10 +123,22 @@ class InstagramExtractor : MediaExtractor {
         return if (items.isNullOrEmpty()) null else ExtractionResult.Success(items)
     }
 
-    private fun fetchHtml(url: String): HtmlFetch {
+    private suspend fun fetchHtml(url: String): HtmlFetch {
+        val first = fetchHtmlOnce(url)
+        // Observed live: this occasionally 302s with an empty body for no discernible reason,
+        // even on an identical immediate retry of the same URL, and clears up on its own.
+        if (first is HtmlFetch.Failed && first.reason == ExtractionError.NETWORK_ERROR) {
+            delay(500)
+            return fetchHtmlOnce(url)
+        }
+        return first
+    }
+
+    private fun fetchHtmlOnce(url: String): HtmlFetch {
         val request = Request.Builder()
             .url(url)
             .header(webAppIdHeader.first, webAppIdHeader.second)
+            .header("User-Agent", linkPreviewUserAgent)
             .header("Accept", "text/html,application/xhtml+xml")
             .build()
 
