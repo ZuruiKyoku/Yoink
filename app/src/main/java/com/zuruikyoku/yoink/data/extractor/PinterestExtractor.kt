@@ -19,10 +19,22 @@ import kotlin.math.abs
  * structured `<script type="application/json">` parse. The structured parse and Open
  * Graph tags are kept as fallbacks. Breaks independently of the Twitter/Instagram
  * extractors if Pinterest reshapes its page data again.
+ *
+ * Verified live (Sept 2026): this was the actual cause of video/GIF pins only downloading
+ * a still image. A normal browser User-Agent gets an empty shell from Pinterest too — the
+ * embedded JSON's `pins`/`resources` state comes back completely empty, no `images`, no
+ * `videos`, nothing to scan — so extraction silently fell through every layer to the OG-tag
+ * fallback, which only ever exposes a static `og:image`. Spoofing the same link-preview UA
+ * that unlocks Instagram (WhatsApp's) gets the real embedded JSON back, `"videos"` key and
+ * all, which is what the raw mp4-scan above was actually written against.
  */
 class PinterestExtractor : MediaExtractor {
 
     override val platform = Platform.PINTEREST
+
+    // See InstagramExtractor: confirmed live that Pinterest also serves an empty shell to a
+    // normal browser UA but real embedded post JSON to known link-preview crawlers.
+    private val linkPreviewUserAgent = "WhatsApp/2.23.20.0"
 
     private val pinUrlRegex = Regex(
         """pinterest\.[a-z.]+/pin/[A-Za-z0-9_-]+|pin\.it/[A-Za-z0-9]+""",
@@ -55,6 +67,7 @@ class PinterestExtractor : MediaExtractor {
 
         val request = Request.Builder()
             .url(url)
+            .header("User-Agent", linkPreviewUserAgent)
             .header("Accept", "text/html,application/xhtml+xml")
             .build()
 
