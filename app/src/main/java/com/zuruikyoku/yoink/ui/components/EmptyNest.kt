@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -24,7 +23,7 @@ fun EmptyNest(modifier: Modifier = Modifier) {
             .padding(vertical = 32.dp, horizontal = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        MagpieMascot(modifier = Modifier.size(88.dp))
+        MagpieMascot(size = 88.dp)
         Spacer(Modifier.height(16.dp))
         Text(
             text = stringResource(R.string.nest_empty_title),
